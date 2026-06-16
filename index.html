@@ -244,6 +244,7 @@
   body.admin-mode #admin-shell { min-height:100vh; display:flex; }
   body.admin-mode .field { width:100%; padding:11px 14px; border-radius: 10px; background: rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); color:#fdfcf7; outline:none; font-family: inherit; font-size:.9rem; }
   body.admin-mode .field:focus { border-color: rgba(212,175,55,.6); }
+  select.field option { background-color: #0a1628; color: #fdfcf7; }
   .btn-danger { border:1px solid rgba(239,68,68,.45); color:#fecaca; background: rgba(239,68,68,.08); }
   .btn-danger:hover { background: rgba(239,68,68,.15); }
   .nav-link.active { background: rgba(212,175,55,.12); color:#fdf8e7 !important; border-color: rgba(212,175,55,.4) !important; }
@@ -1841,7 +1842,6 @@
 
   // gallery filters
   const filterBtns = document.querySelectorAll('.filter-btn');
-  const tiles = document.querySelectorAll('#gallery-grid .tile');
   filterBtns.forEach(btn => btn.addEventListener('click', () => {
     filterBtns.forEach(b => {
       b.classList.remove('active', 'bg-gold-400/10', 'border-gold-400/30', 'text-gold-200');
@@ -1850,6 +1850,7 @@
     btn.classList.add('active', 'bg-gold-400/10', 'border-gold-400/30', 'text-gold-200');
     btn.classList.remove('border-white/10', 'text-cream-50/70');
     const cat = btn.dataset.filter;
+    const tiles = document.querySelectorAll('#gallery-grid .tile');
     tiles.forEach(t => {
       const show = cat === 'all' || t.dataset.cat === cat;
       t.style.display = show ? '' : 'none';
@@ -1997,8 +1998,43 @@
     `;
   }
   
-  // Render products immediately on parse
+  // Dynamic Gallery Rendering
+  function renderPublicGallery() {
+    const grid = document.getElementById('gallery-grid');
+    if (!grid) return;
+    
+    const items = (typeof DB !== 'undefined' && DB && DB.gallery) ? DB.gallery : [];
+    if (!items.length) {
+      grid.innerHTML = '<div class="col-span-full text-center py-10 text-cream-50/60">No images available.</div>';
+      return;
+    }
+    
+    grid.innerHTML = items.map(g => {
+      const src = g.src.replace(/"/g, '&quot;');
+      const label = (g.label || 'Gallery Image').replace(/"/g, '&quot;');
+      const cat = (g.cat || 'general').replace(/"/g, '&quot;');
+      return `
+      <div class="tile group relative rounded-2xl overflow-hidden mb-4 break-inside-avoid shadow-lg shadow-black/10 bg-white/5 border border-white/10" data-cat="${cat}" data-reveal>
+        <img src="${src}" alt="${label}" class="w-full h-auto object-cover group-hover:scale-105 transition duration-700 ease-out" onerror="this.style.background='#0f1f37';this.alt='Image not found'" data-zoom/>
+        <div class="absolute inset-0 bg-gradient-to-t from-navy-950/95 via-navy-950/20 to-transparent opacity-0 group-hover:opacity-100 transition duration-500"></div>
+        <div class="absolute left-4 right-4 bottom-4 translate-y-4 group-hover:translate-y-0 opacity-0 group-hover:opacity-100 transition duration-500 ease-out">
+          <div class="text-[10px] tracking-[.22em] uppercase text-gold-300">${cat}</div>
+          <h3 class="font-display text-sm text-cream-50 leading-tight mt-1">${label}</h3>
+        </div>
+      </div>`;
+    }).join('');
+    
+    // Re-bind intersection observer for new reveal elements
+    const revealEls = grid.querySelectorAll('[data-reveal]');
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); } });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    revealEls.forEach(el => io.observe(el));
+  }
+
+  // Render products and gallery immediately on parse
   renderPublicProducts();
+  renderPublicGallery();
 </script>
 </div>
 <!-- ====================== END SITE SHELL ====================== -->
@@ -2630,9 +2666,9 @@ modal.addEventListener('click', e => { if (e.target === modal) modal.classList.a
 
 const SCHEMAS = {
   services:     [['image','Service image (optional)','image'],['icon','Icon (emoji, fallback)','text'],['title','Title','text'],['desc','Short description','textarea']],
-  products:     [['image','Product image','image'],['name','Name','text'],['cat','Category','text'],['price','Price label','text'],['desc','Description','textarea']],
-  gallery:      [['src','Gallery image','image'],['cat','Category (weight, skin, family, kids)','text'],['label','Label','text']],
-  testimonials: [['image','Client photo (optional)','image'],['name','Client name','text'],['tag','Tag (e.g. −23 KG)','text'],['text','Review text','textarea']],
+  products:     [['image','Product image','image'],['name','Name','text'],['cat','Category','select_cat'],['price','Price label','text'],['desc','Description','textarea']],
+  gallery:      [['src','Gallery image','image'],['cat','Category','select_cat'],['label','Label','text']],
+  testimonials: [['image','Client photo (optional)','image'],['name','Client name','text'],['tag','Tag (e.g. -23 KG)','text'],['text','Review text','textarea']],
   inquiries:    [['name','Name','text'],['phone','Phone','text'],['service','Service','text'],['status','Status (New, Contacted, In progress, Converted, Lost)','text'],['note','Notes','textarea']],
 };
 let editing = null; // {kind, id}
@@ -2644,6 +2680,16 @@ function openModal(kind, id = null) {
   const record = id ? DB[kind].find(r => r.id === id) : {};
   modalForm.innerHTML = fields.map(([k, label, type]) => {
     const val = record[k] || '';
+    if (type === 'select_cat') {
+      const cats = [
+        ['weight', 'Weight Management'], ['sports', 'Sports Nutrition'], ['energy', 'Energy'], 
+        ['heart', 'Heart Health'], ['bone', 'Bone & Joint'], ['digestive', 'Digestive'], 
+        ['skin', 'Skin & Hair'], ['women', 'Women\'s Choice'], ['men', 'Men\'s Health'], 
+        ['kids', 'Children\'s Nutrition'], ['ayurvedic', 'Ayurvedic']
+      ];
+      const options = cats.map(([cv, cl]) => `<option value="${cv}" ${val === cv ? 'selected' : ''}>${cl}</option>`).join('');
+      return `<label class="block"><div class="text-[11.5px] tracking-[.16em] uppercase text-cream-50/55 mb-1.5">${label}</div><select name="${k}" class="field">${options}</select></label>`;
+    }
     if (type === 'textarea') {
       return `<label class="block"><div class="text-[11.5px] tracking-[.16em] uppercase text-cream-50/55 mb-1.5">${label}</div><textarea name="${k}" rows="3" class="field">${val}</textarea></label>`;
     }
@@ -2818,7 +2864,9 @@ function rerenderAll() {
   if (typeof renderPublicProducts === 'function') {
     renderPublicProducts();
   }
-
+  if (typeof renderPublicGallery === 'function') {
+    renderPublicGallery();
+  }
 }
 rerenderAll();
 showPage('dashboard');
